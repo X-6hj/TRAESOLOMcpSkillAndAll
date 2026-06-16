@@ -22,8 +22,8 @@ description: "Automates PTA (pintia.cn) problem solving for all question types: 
 8. [阶段五：填空题（4 步）](#阶段五填空题)
 9. [阶段六：批量完成所有题目](#阶段六批量完成所有题目)
 10. [完整执行示例](#完整执行示例)
-11. [常见问题与解决方案（9 问）](#常见问题与解决方案)
-12. [关键原则总结（16 条）](#关键原则总结)
+11. [常见问题与解决方案（12 问）](#常见问题与解决方案)
+12. [关键原则总结（18 条）](#关键原则总结)
 
 ---
 
@@ -2309,6 +2309,107 @@ if (radio) {
 
 5. 如果以上所有方法都不可行：告知用户具体题目编号和已尝试的方案，请求用户提供图像的文字描述。但**不要在一开始就放弃**——至少应尝试前 3 种方法后再考虑此兜底方案。
 
+### Q10：MCP 工具的调用方式（重要！与实际环境相关）
+
+**现象**：直接调用 `browser_lock`、`browser_navigate` 等工具名时返回错误 `Tool's name is not available`，导致误以为 integrated_browser 不可用，浪费时间检查 MCP 配置文件甚至启动 mcp-builder skill 准备重新创建。
+
+**根因**：在当前 TRAE 环境中，MCP 工具不是作为独立工具直接暴露的，而是通过 `run_mcp` 统一代理调用。需要指定 `server_name` 和 `tool_name` 参数来路由到具体的 MCP 服务和工具。这不是 MCP 服务器的问题，而是调用的方式不同于 skill 文档中写的简化调用形式。
+
+**正确做法**：
+
+所有 MCP 浏览器工具都通过统一的 `run_mcp` 入口调用，格式如下：
+
+| skill 文档中的写法 | 实际调用方式 |
+|---|---|
+| `browser_lock()` | `run_mcp(server_name="integrated_browser", tool_name="browser_lock", args={})` |
+| `browser_navigate(url)` | `run_mcp(server_name="integrated_browser", tool_name="browser_navigate", args={"url": "https://..."})` |
+| `browser_snapshot()` | `run_mcp(server_name="integrated_browser", tool_name="browser_snapshot", args={})` |
+| `browser_click(ref=N)` | `run_mcp(server_name="integrated_browser", tool_name="browser_click", args={"ref": "eN"})` （注意 ref 值是字符串，如 `"e33"`） |
+| `browser_type(ref, text)` | `run_mcp(server_name="integrated_browser", tool_name="browser_type", args={"ref": "eN", "text": "..."})` |
+| `browser_evaluate(script)` | `run_mcp(server_name="integrated_browser", tool_name="browser_evaluate", args={"script": "..."})` |
+| `browser_scroll(ref)` | `run_mcp(server_name="integrated_browser", tool_name="browser_scroll", args={"ref": "eN"})` |
+| `browser_wait_for(time)` | `run_mcp(server_name="integrated_browser", tool_name="browser_wait_for", args={"time": N})` |
+| `browser_unlock()` | `run_mcp(server_name="integrated_browser", tool_name="browser_unlock", args={})` |
+
+**关键要点**：
+- `server_name` 始终为 `"integrated_browser"`
+- `tool_name` 为具体的工具名（如 `"browser_click"`）
+- `ref` 参数的值是**字符串**类型（如 `"e33"`），而非数字 —— snapshot 返回的 ref 值带有 `e` 前缀
+- 先尝试直接调用；如果返回 "not available"，再改用 `run_mcp` 方式
+
+**检查 MCP 是否真的可用**：
+
+不要通过检查目录或配置文件来判断，直接用 `run_mcp` 调用 `browser_lock`：
+- 如果返回 `"Browser lock acquired successfully!"` → MCP 可用，直接继续操作
+- 如果返回 `"Tool not found"` 或类似错误 → 参考 [附录 A：MCP 工具创建指南](#附录-amcp-工具创建指南)
+
+### Q11：browser_evaluate 脚本执行后返回值为空
+
+**现象**：用 `browser_evaluate` 执行了一段 JS 脚本，预期返回某个字符串或 JSON 结果，但实际返回 `null` 或空内容。例如执行了 radio 状态检查脚本，期望看到每个 radio 的 checked 状态，但结果为空。
+
+**根因**：在 `browser_evaluate` 中执行的 JS 脚本，只有**最后一条语句的值**会作为返回值。如果脚本结尾是一个 `for` 循环、`if` 语句或不返回值的表达式，则返回值就是 `undefined`/`null`。以下写法都不会返回值：
+
+```js
+// 错误写法 1：赋值语句不返回值
+var result = someArray.join('\n');
+
+// 错误写法 2：for 循环后没有返回值
+for (...) { ... }
+
+// 错误写法 3：多条语句后没有最后的表达式
+radios[12].checked = true;
+radios[12].dispatchEvent(new Event('change', { bubbles: true }));
+```
+
+**正确做法**：确保脚本**最后一条语句**是一个有明确返回值（且可序列化）的表达式，或使用 `return`：
+
+```js
+// 正确写法 1：最后一行是一个字符串表达式
+var result = someArray.join('\n');
+result;  // ← 最后一行直接写变量名，它的值就是返回值
+
+// 正确写法 2：最后一行直接是字符串字面量
+radios[12].checked = true;
+radios[12].dispatchEvent(new Event('change', { bubbles: true }));
+'OK: changed';  // ← 字符串字面量作为返回值
+
+// 正确写法 3：使用 JSON.stringify 返回结构化数据
+var info = { total: 10, checked: [1, 3, 5] };
+JSON.stringify(info);  // ← JSON 字符串作为返回值
+```
+
+### Q12：考试批量模式下按钮在视口外导致 browser_click 失败
+
+**现象**：在考试批量模式页面（如 `https://pintia.cn/problem-sets/.../exam/problems/type/2`）点击"保存"按钮或某些底部的 radio 选项时，`browser_click` 报错 `coordinates outside the visible viewport`。
+
+**根因**：考试批量模式页面包含大量题目（如 12 道判断题 + 13 道选择题），页面总高度远超一屏。"保存"按钮和页面下半部分的选项在初始加载时不在浏览器可视区域内。
+
+**正确做法**（按优先级）：
+
+1. **首选方案（最可靠）**：用 `browser_evaluate` 通过 JS 直接操作元素，完全绕过视口限制。对于按钮点击：
+
+```js
+var btns = document.querySelectorAll('button');
+for (var i = 0; i < btns.length; i++) {
+    var txt = (btns[i].innerText || btns[i].textContent || '').trim();
+    if (txt === '保存') {
+        btns[i].click();
+        return 'Clicked 保存 at index ' + i;
+    }
+}
+return '保存 button not found';
+```
+
+2. **次选方案**：先用 `browser_scroll` 将目标元素滚动到视口内，再用 `browser_click`：
+
+```
+browser_scroll(ref=e103, scrollIntoView=true)
+→ 等待滚动完成
+→ browser_click(ref=e103)
+```
+
+3. **对于 radio 选项**：直接通过序号用 `browser_evaluate` 操作（考试批量模式所有题型都在同一页，radio 序号可推算）。例如：单选题每题 4 个选项，第 N 题的选项 A 是 `radios[(N-1)*4]`。
+
 ---
 
 ## 关键原则总结
@@ -2329,3 +2430,5 @@ if (radio) {
 14. **ID 优先于坐标点击**：当元素有明确 ID 时（如 `input-radio-option-...-A`），优先用 `getElementById` + `checked = true` + `dispatchEvent`，比坐标点击更可靠
 15. **有图题目不能直接放弃**：`browser_snapshot` 看不到图像不代表无法解决。优先尝试：DOM 探索 → WebSearch → 算法推理 → DOM 操作，全部不行再请求用户帮助
 16. **图形题目长期解决方案**：可以扩展 `integrated_browser` MCP 增加 `browser_screenshot` 工具，截取图像后配合多模态模型识别
+17. **MCP 工具通过 `run_mcp` 调用**：在当前 TRAE 环境中，所有 MCP 工具通过 `run_mcp(server_name="integrated_browser", tool_name="...", args={...})` 调用，而不是直接调用工具名。`ref` 参数是字符串（如 `"e33"`），不是数字
+18. **browser_evaluate 最后一条语句必须返回值**：JS 脚本的返回值为脚本最后一条表达式的值。如果脚本以 for 循环或赋值语句结尾，返回值会是 null。必须以字符串字面量、JSON.stringify() 或变量名作为最后一行
