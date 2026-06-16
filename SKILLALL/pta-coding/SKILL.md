@@ -17,12 +17,13 @@ description: "Automates PTA (pintia.cn) problem solving for all question types: 
 4. [阶段一：登录与导航（4 步）](#阶段一登录与导航)
 5. [阶段二：判断题目类型（1 步）](#阶段二判断题目类型)
 6. [阶段三：编程题（9 步 + 4 个结果分支）](#阶段三编程题)
-7. [阶段四：选择题 & 判断题（4 步）](#阶段四选择题--判断题)
+7. [阶段四：选择题 & 判断题（5 步）](#阶段四选择题--判断题)
+   - [图像类选项题目的处理策略](#图像类选项题目的处理策略)
 8. [阶段五：填空题（4 步）](#阶段五填空题)
 9. [阶段六：批量完成所有题目](#阶段六批量完成所有题目)
 10. [完整执行示例](#完整执行示例)
-11. [常见问题与解决方案（7 问）](#常见问题与解决方案)
-12. [关键原则总结（10 条）](#关键原则总结)
+11. [常见问题与解决方案（9 问）](#常见问题与解决方案)
+12. [关键原则总结（16 条）](#关键原则总结)
 
 ---
 
@@ -78,12 +79,45 @@ browser_lock  →  执行一系列操作  →  browser_unlock
 4. **同一 Browser View**：lock 后不要导航到与 PTA 无关的页面，所有操作都在同一个锁周期内完成
 5. **snapshot 文本很长**：snapshot 会返回页面所有可见文本和可交互元素。读 snapshot 时重点关注：按钮文字、题目描述、选项文本、弹窗内容
 6. **点击被拦截的兜底方案**：当 `browser_click` 报 `Click target intercepted`（目标被遮挡）时，说明目标元素上方有其他 DOM 层级（如顶部导航栏浮层、模态遮罩等）。此时应使用 `browser_evaluate` 直接通过 JS 执行点击，绕过遮挡。具体做法见下方"点击拦截兜底脚本"
+7. **snapshot 无法识别图像时不要放弃**：`browser_snapshot` 只能提取文本内容，无法解析图片/Canvas/SVG 中的图像内容。遇到选项为图像的题目时，不要直接放弃，应按照以下顺序尝试：
+   - (1) 用 `browser_evaluate` 提取图像 URL 和 SVG 结构数据
+   - (2) 用 `WebSearch` 搜索题目文本 + 关键字（如"正确答案"、"PTA"）
+   - (3) 基于算法/知识点推理正确答案
+   - (4) 用 `browser_evaluate` + `getElementById` 直接操作 radio 按钮（绕过坐标点击失效问题）
+   详见 [图像类选项题目的处理策略](#图像类选项题目的处理策略)
 
 ### 点击拦截兜底脚本
 
-当 `browser_click` 因目标被拦截而失败时，使用 `browser_evaluate` 通过内容匹配来点击元素：
+当 `browser_click` 因目标被拦截或元素在可视区域外而失败时，使用 `browser_evaluate` 通过 JS 直接操作元素。按优先级排列：
 
-**按文本匹配选中 radio / label**：
+**方案一（首选）：通过元素 ID 精确点击**
+
+当页面元素有明确的 `id` 属性（如 PTA 的 radio 元素 `id="input-radio-option-<题目ID>-<选项字母>"`），直接通过 ID 定位是最可靠的方式：
+
+```js
+// 通过题目 ID 构造选项 ID，直接选中目标选项
+var radio = document.getElementById('input-radio-option-2065272941157388299-A');
+if (radio) {
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+    'OK: 选项A已选中';
+} else {
+    'FAIL: 未找到该radio';
+}
+```
+
+**如何获取题目 ID**：在 `browser_snapshot` 中，题目选项的 label 元素通常带有 `for` 属性，如 `for="input-radio-option-2065272941157388299-A"`。`browser_click` 报错时，错误信息中也可能包含这些 ID。如果 snapshot 中看不到，可用 `browser_evaluate` 查看所有 radio 的 id：
+
+```js
+var radios = document.querySelectorAll('input[type="radio"]');
+var ids = [];
+for (var i = 0; i < radios.length; i++) {
+    ids.push(radios[i].id + ': checked=' + radios[i].checked);
+}
+JSON.stringify(ids);
+```
+
+**方案二（备选）：按文本匹配选中 radio / label**：
 
 ```js
 // 遍历所有 radio 的父元素或 label，匹配文本后点击
@@ -1550,27 +1584,34 @@ snapshot 获取全部题目 (一次性看到所有题目和选项)
 | **工具** | `browser_snapshot`（获取 radio/label 的 ref）→ `browser_click`（推荐）或 `browser_evaluate`（备选） |
 | **操作目的** | 点击正确选项对应的 radio 按钮或 label |
 
+> **如果选项是图像（snapshot 中只显示"A."、"B."等而看不到具体内容）**：参见 [图像类选项题目的处理策略](#图像类选项题目的处理策略)，先确定正确答案再操作。
+
 **主方案：`browser_click`（通过 snapshot ref）**
 
 1. `browser_snapshot`
 2. 在 snapshot 中找到正确选项对应的 radio button 或 label 的 ref
 3. `browser_click`，ref = 找到的 ref
 
-**备选方案：`browser_evaluate`**
+**备选方案 A：`browser_evaluate` + `getElementById`（最可靠，推荐）**
+
+当 radio 有明确的 id 属性时（PTA 的 radio 格式为 `input-radio-option-<题目ID>-<选项字母>`），直接通过 ID 操作：
 
 ```js
-// 方法1：遍历所有 label，匹配文本后点击
-var labels = document.querySelectorAll('label');
-for (var i = 0; i < labels.length; i++) {
-    var txt = (labels[i].innerText || labels[i].textContent || '').trim();
-    if (txt.indexOf('正确答案的关键词') >= 0) {
-        labels[i].click();
-        'CLICKED: ' + txt.substring(0, 50);
-        break;
-    }
+// 通过题目 ID 和选项字母精准操作
+var radio = document.getElementById('input-radio-option-<题目ID>-<选项字母>');
+if (radio) {
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+    'OK';
+} else {
+    'ID_NOT_FOUND';
 }
+```
 
-// 方法2：如果 label 不包含文本，直接点对应 radio
+**备选方案 B：`browser_evaluate` 按文本匹配**
+
+```js
+// 遍历所有 label 或 radio 的父元素，匹配文本后点击
 var radios = document.querySelectorAll('input[type="radio"]');
 for (var j = 0; j < radios.length; j++) {
     var label = radios[j].parentElement;
@@ -1602,6 +1643,57 @@ JSON.stringify(checked);
 ```
 
 - 确认 `checked: true` 的那一项是你的目标选项
+
+---
+
+### 图像类选项题目的处理策略
+
+> 当题目选项为图像（如二叉树结构图、流程图等），`browser_snapshot` 只能看到"A."、"B."、"C."、"D." 而看不到图像内容时，**不要放弃**。按以下步骤处理：
+
+**① 用 `browser_evaluate` 探索 DOM**：提取图像 URL、SVG 结构数据，尝试从元数据中获取线索
+
+```js
+// 提取选项图像信息
+var allImgs = document.querySelectorAll('img');
+var results = [];
+for (var i = 0; i < allImgs.length; i++) {
+    results.push({
+        index: i,
+        src: allImgs[i].src.substring(0, 200),
+        alt: allImgs[i].alt || '(空)',
+        size: allImgs[i].naturalWidth + 'x' + allImgs[i].naturalHeight
+    });
+}
+JSON.stringify(results);
+```
+
+**② 用 `WebSearch` 搜索题目答案**：这是成功率最高的方法。PTA 上的图形题绝大多数是经典考题（考研真题、教材习题），关键词如 `"<题目文本>" "<来源>" "正确答案"` 通常能直接搜到解析文章。
+
+**③ 基于算法/知识点推理**：即使看不到图像，也可通过算法规则排除不合法选项。
+- 折半查找判定树：必须是二叉搜索树，根为区间中点
+- 二叉搜索树：插入总是叶子节点，中序遍历有序
+- 完全二叉树：按层编号，最后一层左连续
+
+**④ 用 `browser_evaluate` + `getElementById` 操作 DOM**：确定答案后，通过 radio 的 ID 直接选中（因为图像选项的 radio 通常没有文本标签，`browser_click` 可能因坐标问题失败）：
+
+```js
+// 第一步：查看所有 radio 的 ID
+var radios = document.querySelectorAll('input[type="radio"]');
+var ids = [];
+for (var i = 0; i < radios.length; i++) {
+    ids.push(i + ': ' + radios[i].id + ' checked=' + radios[i].checked);
+}
+JSON.stringify(ids);
+
+// 第二步：通过 ID 直接选中目标选项
+var radio = document.getElementById('input-radio-option-<题目ID>-<选项字母>');
+if (radio) {
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+}
+```
+
+**⑤ 长期方案**：创建 `browser_screenshot` MCP 工具，截取页面图像后配合多模态模型识别。详见 [Q9](#q9选项为图像时题目无法通过算法推理确定答案怎么办)。
 
 ---
 
@@ -2050,14 +2142,92 @@ inp.dispatchEvent(new Event('change', { bubbles: true }));
 
 ### Q7：题目描述中含有图片或公式，snapshot 中看不到
 
-**现象**：snapshot 的文本中题目描述不完整，缺少关键信息
+**现象**：snapshot 的文本中题目描述不完整，缺少关键信息。特别是选项为图像（如二叉树图、流程图、示意图等），snapshot 中只显示"A."、"B."、"C."、"D."，没有选项的具体内容。
 
-**根因**：snapshot 只能获取文本内容，图片、Canvas、SVG 公式无法以文本形式呈现
+**根因**：snapshot 只能获取文本内容，图片、Canvas、SVG 公式无法以文本形式呈现。PTA 平台对于图形类题目（如折半查找判定树、二叉树结构等）使用 `<img>` 标签或 SVG 绘制选项，browser_snapshot 无法解析像素级图像。
 
-**正确做法**：
-1. 尝试从题目周围的文字上下文中推断
-2. 如果图片是关键信息且无法推断 → 告知用户"题目中有图片，请提供文字描述"
-3. 如果是不影响理解的辅助图示 → 忽略，继续作答
+**正确做法**（按优先级尝试，不能因为识别不了就放弃）：
+
+**① 用 `browser_evaluate` 提取图像的 URL 和结构信息**：
+
+```js
+// 提取选项附近所有图像的 URL
+var allImgs = document.querySelectorAll('img');
+var results = [];
+for (var i = 0; i < allImgs.length; i++) {
+    results.push({
+        index: i,
+        src: allImgs[i].src.substring(0, 200),
+        alt: allImgs[i].alt || '(空)',
+        width: allImgs[i].naturalWidth,
+        height: allImgs[i].naturalHeight
+    });
+}
+JSON.stringify(results);
+```
+
+如果图像是 SVG 格式（包含 `<circle>`、`<line>`、`<text>` 等元素），可以提取 SVG 中的结构数据，判断树的结构类型：
+
+```js
+// 检查 SVG 中是否有树状结构
+var svgs = document.querySelectorAll('svg');
+var results = [];
+for (var i = 0; i < svgs.length; i++) {
+    var circles = svgs[i].querySelectorAll('circle');
+    var texts = svgs[i].querySelectorAll('text');
+    var lines = svgs[i].querySelectorAll('line, path');
+    if (texts.length >= 3 || (circles.length >= 3 && lines.length >= 2)) {
+        results.push({
+            svg_index: i,
+            circles: circles.length,
+            texts: texts.length,
+            lines: lines.length,
+            node_values: Array.from(texts).map(function(t) { return t.textContent; }).join(', ')
+        });
+    }
+}
+JSON.stringify(results);
+```
+
+**② 用 `WebSearch` 搜索题目文本 + 关键字**：
+
+这是最有效的方法之一。PTA 上的题目大多是经典考题（如考研真题、教材习题），网上有大量解析文章和答案。
+
+- 搜索格式：`"<题目文本核心句>" + "正确答案"` 或 `"<题目文本核心句>" + "PTA"`
+- 例如对"下列二叉树中，可能成为折半查找判定树"这道题，搜索 **"下列二叉树中，可能成为折半查找判定树" 浙江大学 正确答案** 即可找到答案
+- 优先查看 CSDN 博客、知乎专栏等来源，这些平台有大量 PTA 题目解析
+- 如果搜索结果中有 `WebFetch` 可读取的页面，读取后直接找到对应题号的答案
+
+**③ 基于算法/知识点推理**：
+
+如果搜索不到，利用算法/数据结构知识进行推理。例如折半查找判定树的构造规则、二叉树的性质等。推理时注意：
+- 折半查找判定树必须是二叉搜索树（中序遍历有序）
+- 根节点必须是区间中点，左右子树遵循相同规则
+- 可以根据这些性质排除不符合的选项
+
+**④ 通过 `browser_evaluate` + `getElementById` 直接操作 radio**：
+
+当确定正确答案后，由于图像选项的 radio 通常没有文本标签，`browser_click` 可能因坐标问题失败。此时应使用 `getElementById` 直接操作 DOM：
+
+```js
+// 查看所有 radio 的 ID，定位目标题目的选项
+var radios = document.querySelectorAll('input[type="radio"]');
+var ids = [];
+for (var i = 0; i < radios.length; i++) {
+    ids.push(i + ': ' + radios[i].id + ' checked=' + radios[i].checked);
+}
+JSON.stringify(ids);
+
+// 然后通过 ID 直接选中
+var radio = document.getElementById('input-radio-option-<题目ID>-<选项字母>');
+if (radio) {
+    radio.checked = true;
+    radio.dispatchEvent(new Event('change', { bubbles: true }));
+}
+```
+
+**⑤ 如果以上方法都失败**：作为最后手段，告知用户"题目 X 的选项为图像，无法通过工具识别，但已通过搜索/推理得到答案 Y，请手动确认"。但不要把此作为首选——应优先尝试上述四种方法。
+
 
 ### Q8：点击 radio 选项时被遮挡（Click target intercepted）
 
@@ -2066,23 +2236,78 @@ inp.dispatchEvent(new Event('change', { bubbles: true }));
 **根因**：PTA 页面顶部有固定定位（`position: fixed`）的导航栏或状态栏，当目标 radio 滚动到页面顶部附近时，被这些浮层遮挡
 
 **正确做法**：
-1. **首选方案**：使用 `browser_evaluate` 通过文本匹配找到目标 radio 并直接点击，绕过遮挡：
+1. **首选方案**：使用 `browser_evaluate` + `getElementById` 通过题目 ID 精确选中目标 radio，绕过遮挡（详见 [点击拦截兜底脚本](#点击拦截兜底脚本) 方案一）：
+2. **备选方案**：使用 `browser_evaluate` 通过文本匹配找到目标 radio 并直接点击：
+3. **兜底方案**：先 `browser_scroll` 将目标 ref 滚动到页面可视区域的下半部分（远离顶部导航栏），再重试 `browser_click`
+4. **注意**：`indexOf` 匹配时使用选项文本的**核心特征词**（如选项值 `3, 1, 6, 13, 11, 5`），不要用太短的通用词（如只匹配 `A.`），避免误点
 
-```js
-var radios = document.querySelectorAll('input[type="radio"]');
-for (var i = 0; i < radios.length; i++) {
-    var parent = radios[i].parentElement;
-    var txt = (parent ? (parent.innerText || parent.textContent || '') : '').trim();
-    if (txt.indexOf('目标选项的关键文本') >= 0) {
-        radios[i].click();
-        return 'CLICKED at index: ' + i;
-    }
-}
-return 'NOT FOUND';
-```
 
-2. **备选方案**：先 `browser_scroll` 将目标 ref 滚动到页面可视区域的下半部分（远离顶部导航栏），再重试 `browser_click`
-3. **注意**：`indexOf` 匹配时使用选项文本的**核心特征词**（如选项值 `3, 1, 6, 13, 11, 5`），不要用太短的通用词（如只匹配 `A.`），避免误点
+### Q9：选项为图像时，题目无法通过算法推理确定答案怎么办
+
+**现象**：题目的选项全是图像（如二叉树结构图），`browser_snapshot` 无法识别，`browser_evaluate` 提取的 SVG/图片 URL 也无法直接解析出结构信息，且 WebSearch 搜不到该题目的答案。
+
+**根因**：某些题目的正确答案完全依赖于图像内容的比较（如"以下哪个二叉树是合法的折半查找判定树"），仅凭文字无法判断。但这种情况极少——大多数 PTA 图形题都是经典考题，网上有解析。
+
+**正确做法**（完整的解决链路，从最优到兜底）：
+
+1. **提取图像 URL 和元数据**：用 `browser_evaluate` 获取选项图像的 URL、尺寸、alt 属性等。即使不能"看懂"图像，URL 本身可能包含线索（如 `images.ptausercontent.com/282` 中的数字编号）
+
+2. **WebSearch 搜索**：用题目文本精确搜索。这是成功率最高的方法，PTA 上的图形题绝大多数是经典题（考研408真题、教材习题），网上有完整解析。
+   - 搜索格式：`"<题目文本>" "<来源>" "正确答案"`（如 `"下列二叉树中，可能成为折半查找判定树" 浙江大学 正确答案`）
+   - 如果搜索结果中有博客文章（如 CSDN），用 `WebFetch` 读取全文，搜索对应题号（如"2-4"）的答案
+
+3. **基于算法/知识点推理**：即使无法看到图像，也可以通过算法性质排除不符合的选项。例如：
+   - 折半查找判定树：必须是二叉搜索树，根为区间中点，左右子树递归满足
+   - 二叉搜索树：中序遍历有序，插入总是作为叶子节点
+   - 完全二叉树：按层编号，最后一层从左到右连续
+
+4. **创建专门的图像识别 MCP 工具**（推荐作为长期方案）：
+   
+   如果频繁遇到图形题且上述方法不可行，可以创建一个 MCP 工具来实现图像识别。思路如下：
+   
+   - 工具名：`browser_screenshot`
+   - 功能：截取浏览器当前页面的指定区域（如某道题的选项区域）
+   - 实现：用 Playwright 的 `page.screenshot({ clip: {...} })` 截取元素区域，保存为 PNG
+   - 配合：将截图发送给多模态模型进行识别（如 GPT-4V、Claude Vision 等）
+   - 参数设计：
+     ```json
+     {
+       "name": "browser_screenshot",
+       "description": "截取浏览器页面指定区域为图片，用于识别图像内容",
+       "arguments": {
+         "ref": "目标元素的 ref 编号（可选，不传则截取全页）",
+         "savePath": "截图保存路径"
+       }
+     }
+     ```
+   - 创建思路：在 `integrated_browser` MCP 中扩展此工具，或在单独的 MCP 服务中实现。核心代码：
+     ```typescript
+     server.registerTool("browser_screenshot", {
+       description: "截取浏览器页面指定区域为图片",
+       inputSchema: {
+         type: "object",
+         properties: {
+           ref: { type: "number", description: "要截取的元素 ref 编号" },
+           savePath: { type: "string", description: "保存路径，默认当前目录" }
+         }
+       }
+     }, async (args) => {
+       const page = await BrowserManager.getInstance().getPage();
+       if (args.ref) {
+         const locator = page.locator(`[data-ref="${args.ref}"]`);
+         const box = await locator.boundingBox();
+         if (box) {
+           await page.screenshot({ path: args.savePath, clip: box });
+         }
+       } else {
+         await page.screenshot({ path: args.savePath, fullPage: true });
+       }
+       return { content: [{ type: "text", text: `截图已保存到 ${args.savePath}` }] };
+     });
+     ```
+   - **注意**：图像识别需要额外配置多模态模型。如果当前环境不支持，优先使用 WebSearch 方法。
+
+5. 如果以上所有方法都不可行：告知用户具体题目编号和已尝试的方案，请求用户提供图像的文字描述。但**不要在一开始就放弃**——至少应尝试前 3 种方法后再考虑此兜底方案。
 
 ---
 
@@ -2101,3 +2326,6 @@ return 'NOT FOUND';
 11. **考试页面优先直达**：如果用户提供了 `/exam/problems/type/N` 格式的 URL，直接导航过去即可，不需要从仪表盘逐级进入
 12. **考试批量模式一页全答**：考试页面同一题型的所有题目在同一页上，先全部答完再统一保存，不要逐题保存
 13. **点击被拦截用 evaluate 兜底**：`browser_click` 报 `Click target intercepted` 时，用 `browser_evaluate` 按文本匹配直接点击元素，绕过 DOM 遮挡
+14. **ID 优先于坐标点击**：当元素有明确 ID 时（如 `input-radio-option-...-A`），优先用 `getElementById` + `checked = true` + `dispatchEvent`，比坐标点击更可靠
+15. **有图题目不能直接放弃**：`browser_snapshot` 看不到图像不代表无法解决。优先尝试：DOM 探索 → WebSearch → 算法推理 → DOM 操作，全部不行再请求用户帮助
+16. **图形题目长期解决方案**：可以扩展 `integrated_browser` MCP 增加 `browser_screenshot` 工具，截取图像后配合多模态模型识别
