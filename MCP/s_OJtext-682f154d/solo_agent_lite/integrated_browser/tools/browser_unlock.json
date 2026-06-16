@@ -1,0 +1,14 @@
+{
+  "name": "browser_unlock",
+  "description": "Unlock the browser to allow user interaction. Call this when you are done with a sequence of browser operations.\n",
+  "arguments": {
+    "properties": {
+      "viewId": {
+        "description": "Target browser tab ID. If omitted, uses the last interacted tab.",
+        "type": "string"
+      }
+    },
+    "required": [],
+    "type": "object"
+  }
+}

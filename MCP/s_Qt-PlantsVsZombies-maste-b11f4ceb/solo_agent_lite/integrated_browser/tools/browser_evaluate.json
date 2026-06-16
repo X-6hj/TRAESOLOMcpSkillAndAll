@@ -1,0 +1,20 @@
+{
+  "name": "browser_evaluate",
+  "description": "Execute JavaScript in the page for debugging and inspection. RESTRICTIONS: Cannot access document.cookie, localStorage, sessionStorage, or credentials. Use for DOM inspection and debugging only.\nWHEN TO USE: Only use browser_evaluate when browser_snapshot cannot detect the elements you need (e.g., custom components without ARIA roles, elements hidden from accessibility tree). Always try browser_snapshot + browser_click/browser_type first.\n\nUSAGE RULES:\n- Keep scripts SHORT and focused. Do one thing per call: either inspect OR act, not both.\n- Always use `return` to return a structured result object (e.g., `return { found: true, text: \"...\" }`).\n- Double-check bracket matching and JS syntax before calling — syntax errors cause silent failures with \"Script failed to execute\".\n- When setting input values, MUST dispatch events: `el.value = 'x'; el.dispatchEvent(new Event('input', { bubbles: true }));`\n- Avoid scripts longer than 15 lines. If you need complex logic, split into multiple evaluate calls.\n",
+  "arguments": {
+    "properties": {
+      "script": {
+        "description": "JavaScript to evaluate in the page context. Use return to return a value. Cannot access cookies, localStorage, or sessionStorage.",
+        "type": "string"
+      },
+      "viewId": {
+        "description": "Target browser tab ID. If omitted, uses the last interacted tab.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "script"
+    ],
+    "type": "object"
+  }
+}

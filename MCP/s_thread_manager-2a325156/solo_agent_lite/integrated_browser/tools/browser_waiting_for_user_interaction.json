@@ -1,0 +1,20 @@
+{
+  "name": "browser_waiting_for_user_interaction",
+  "description": "Request to temporarily hand over control of the browser to the user.\nThe user will be prompted to take control of the browser. Once the user confirms,\nthey can interact with the browser freely. When the user finishes and returns control,\nthe browser will be automatically locked again for the agent to continue.\nUse this tool when you need user assistance with browser interactions,\nsuch as logging in, completing CAPTCHAs, or performing actions that require human judgment.\n",
+  "arguments": {
+    "properties": {
+      "reason": {
+        "description": "The reason why the agent needs to hand over control to the user.\nThis will be displayed to the user to explain why their assistance is needed.\nFor example: \"Please log in to your account\", \"Please complete the CAPTCHA verification\",\n\"Please select the correct option from the dropdown\".",
+        "type": "string"
+      },
+      "viewId": {
+        "description": "Target browser tab ID. If omitted, uses the last interacted tab.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "reason"
+    ],
+    "type": "object"
+  }
+}
