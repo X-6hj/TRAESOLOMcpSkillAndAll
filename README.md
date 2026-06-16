@@ -1,0 +1,2 @@
+# TRAESOLOMcpSkillAndAll
+traeSOLO的mcp和skill等等
